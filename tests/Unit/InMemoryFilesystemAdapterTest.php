@@ -12,6 +12,7 @@ use League\Flysystem\Visibility;
 use Minhyung\Flysystem\Mybox\MyboxAdapter;
 use Minhyung\Flysystem\Mybox\MyboxAdapterOptions;
 use Minhyung\Flysystem\Mybox\Tests\Double\InMemoryMyboxServer;
+use Minhyung\Flysystem\Mybox\Tests\MyboxConformanceOverrides;
 use Minhyung\Mybox\ClientConfig;
 use Minhyung\Mybox\Http\RetryPolicy;
 use Minhyung\Mybox\MyboxClient;
@@ -27,6 +28,8 @@ use Minhyung\Mybox\MyboxClient;
  */
 final class InMemoryFilesystemAdapterTest extends FilesystemAdapterTestCase
 {
+    use MyboxConformanceOverrides;
+
     protected static function createFilesystemAdapter(): FilesystemAdapter
     {
         $factory = new HttpFactory();
@@ -41,33 +44,6 @@ final class InMemoryFilesystemAdapterTest extends FilesystemAdapterTestCase
         // visibility and then assert it comes back; MYBOX stores no such thing, so
         // the adapter reports whatever it was configured to report.
         return new MyboxAdapter($client, options: new MyboxAdapterOptions(visibility: Visibility::PUBLIC));
-    }
-
-    /**
-     * @test
-     */
-    public function setting_visibility(): void
-    {
-        $this->markTestSkipped('MYBOX has no per-file visibility model.');
-    }
-
-    /**
-     * The upstream version also asserts that the visibility given to the second
-     * write comes back, which no fixed-visibility adapter can satisfy. The
-     * overwrite itself is the part worth keeping.
-     *
-     * @test
-     */
-    public function overwriting_a_file(): void
-    {
-        $this->runScenario(function () {
-            $this->givenWeHaveAnExistingFile('path.txt', 'contents');
-            $adapter = $this->adapter();
-
-            $adapter->write('path.txt', 'new contents', new Config());
-
-            self::assertSame('new contents', $adapter->read('path.txt'));
-        });
     }
 
     /**

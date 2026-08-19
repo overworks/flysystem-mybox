@@ -6,12 +6,13 @@ namespace Minhyung\Flysystem\Mybox\Tests\Integration;
 
 use League\Flysystem\AdapterTestUtilities\FilesystemAdapterTestCase;
 use League\Flysystem\FilesystemAdapter;
-use League\Flysystem\FilesystemException;
 use League\Flysystem\Visibility;
 use Minhyung\Flysystem\Mybox\MyboxAdapter;
 use Minhyung\Flysystem\Mybox\MyboxAdapterOptions;
+use Minhyung\Flysystem\Mybox\Tests\MyboxConformanceOverrides;
 use Minhyung\Mybox\Exception\MyboxException;
 use Minhyung\Mybox\MyboxClient;
+use Minhyung\Mybox\Request\ListOptions;
 use PHPUnit\Framework\Attributes\Group;
 
 /**
@@ -29,9 +30,13 @@ use PHPUnit\Framework\Attributes\Group;
 #[Group('integration')]
 final class MyboxFilesystemAdapterTest extends FilesystemAdapterTestCase
 {
+    use MyboxConformanceOverrides;
+
     private static ?MyboxClient $client = null;
 
     private static ?string $sandboxId = null;
+
+    private static ?string $containerId = null;
 
     private static string $sandboxPath = '';
 
@@ -47,9 +52,9 @@ final class MyboxFilesystemAdapterTest extends FilesystemAdapterTestCase
 
         self::$client = MyboxCredentials::client($token);
 
-        $root = self::findOrCreateFolder(MyboxCredentials::SANDBOX, null);
+        self::$containerId = self::findOrCreateFolder(MyboxCredentials::SANDBOX, null);
         $run = uniqid('run-', true);
-        self::$sandboxId = self::findOrCreateFolder($run, $root);
+        self::$sandboxId = self::findOrCreateFolder($run, self::$containerId);
         self::$sandboxPath = MyboxCredentials::SANDBOX . '/' . $run;
 
         // A fatal skips tearDownAfterClass; leave the operator a way back.
@@ -69,6 +74,11 @@ final class MyboxFilesystemAdapterTest extends FilesystemAdapterTestCase
             try {
                 $client->files()->delete($sandboxId);
                 $client->trash()->purge($sandboxId);
+
+                // The container is shared with any concurrent run, so it only goes
+                // once nothing is left in it. Otherwise it accumulates one empty
+                // folder in the account per run.
+                self::removeContainerIfEmpty($client);
             } catch (MyboxException $exception) {
                 fwrite(STDERR, sprintf(
                     "\nCould not remove the sandbox folder: %s\nRun: php tools/cleanup-sandbox.php\n",
@@ -79,8 +89,25 @@ final class MyboxFilesystemAdapterTest extends FilesystemAdapterTestCase
 
         self::$client = null;
         self::$sandboxId = null;
+        self::$containerId = null;
 
         parent::tearDownAfterClass();
+    }
+
+    private static function removeContainerIfEmpty(MyboxClient $client): void
+    {
+        $containerId = self::$containerId;
+
+        if ($containerId === null) {
+            return;
+        }
+
+        if ($client->drive()->listFolder($containerId, new ListOptions(count: 1))->items() !== []) {
+            return; // another run is still using it
+        }
+
+        $client->files()->delete($containerId);
+        $client->trash()->purge($containerId);
     }
 
     protected function setUp(): void
@@ -90,9 +117,6 @@ final class MyboxFilesystemAdapterTest extends FilesystemAdapterTestCase
         }
 
         parent::setUp();
-
-        // A live drive is eventually consistent in places; one retry beats a flake.
-        $this->retryOnException(FilesystemException::class, 3);
     }
 
     protected static function createFilesystemAdapter(): FilesystemAdapter
@@ -108,14 +132,6 @@ final class MyboxFilesystemAdapterTest extends FilesystemAdapterTestCase
             self::$sandboxPath,
             new MyboxAdapterOptions(visibility: Visibility::PUBLIC),
         );
-    }
-
-    /**
-     * @test
-     */
-    public function setting_visibility(): void
-    {
-        $this->markTestSkipped('MYBOX has no per-file visibility model.');
     }
 
     private static function findOrCreateFolder(string $name, ?string $parentId): string

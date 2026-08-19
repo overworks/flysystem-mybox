@@ -5,13 +5,14 @@ it is recorded here rather than left in someone's head. Re-measure with
 `php tools/probe-adapter.php`, which works inside a throwaway folder and cleans
 up after itself.
 
-Measured 2026-08-19 against a live account.
+Measured 2026-08-19 against a live account, with the full Flysystem conformance
+suite run against the same account afterwards (62 tests, 5 skipped, no retries).
 
 | # | Question | Answer | What the adapter does about it |
 |---|---|---|---|
 | a | Is a top-level item's `parentId` a folder id that `FileApi::move()` accepts? | **Yes** | `ResourceLocator::rootId()` reads it off the root listing, so `move()` into the drive root is a single call. The `copy()` + `delete()` fallback remains for the one case that cannot be learned: an empty drive root, where nothing reports a parent id. |
 | b | Does a zero-byte upload succeed? | **Yes** — HTTP 200, `fileSize 0` | Nothing special needed. `writeStream()` with an empty stream declares `fileSize: 0` and works. |
-| c | Which special characters does MYBOX accept in a file name? | **All of them** — square brackets, curly brackets, spaces, `+ # % @ ' ( )`; nothing was rejected | `MyboxFilesystemAdapterTest` uses Flysystem's own `filenameProvider()` unchanged. Only *file* names were probed; folder names go through a different endpoint and were not measured separately. |
+| c | Which special characters does MYBOX accept in a name? | **All of them** — square brackets, curly brackets, spaces, `+ # % @ ' ( )`; nothing was rejected, in file names or in folder names | `MyboxFilesystemAdapterTest` uses Flysystem's own `filenameProvider()` unchanged, and it passes live — that provider covers brackets in *dirnames* too, so folder creation is confirmed as well. |
 | d | Does `rename()` reject a name a sibling already holds? | **Yes** — HTTP 409 | `move()` deletes an occupied destination before renaming into it, because `rename()` has no `isOverwrite`. That pre-delete is required, not defensive. |
 | e | Does a folder listing accept `count=1000`? | **Yes** | `MyboxAdapterOptions::$listPageSize` defaults to 1000, ten times MYBOX's own default of 100. |
 | f | Are names case-sensitive within one folder? | **No** — writing `case.txt` over an existing `Case.txt` overwrote it and kept the spelling `Case.txt` | `Path\NameKey::fold()` lower-cases as well as NFC-normalises, and `ResourceLocator` folds cache keys too. Without it, `fileExists()` would miss the file `write()` had just created, and a snapshot reached through one spelling would go stale when the other spelling was written. |
@@ -29,3 +30,14 @@ Behaviour established by the SDK, and reproduced by
 - An upload whose declared `fileSize` does not match the bytes sent is answered
   with HTTP 500 `File Storage Error`, not a 4xx.
 - `createFolder` has no `isOverwrite`, so a name collision is a hard 409.
+
+
+## Do not add a blanket `retryOnException()`
+
+`FilesystemAdapterTestCase` offers `retryOnException(FilesystemException::class)`,
+and passing it looks like cheap insurance against a flaky network. It is a trap
+here. Several tests *expect* a `FilesystemException` — `fetching_file_size_of_a_directory`
+raises `UnableToRetrieveMetadata` on purpose — and `runScenario()` cannot tell an
+expected failure from a real one. It re-runs the whole scenario for sixty
+seconds, `createDirectory()` calls included, which is both a hung suite and
+exactly the kind of burst MYBOX restricts accounts for.
