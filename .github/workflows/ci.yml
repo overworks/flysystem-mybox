@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [ 0.x, main ]
+  pull_request:
+
+permissions:
+  contents: read
+
+# A newer push to the same branch makes the in-flight run redundant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: PHP ${{ matrix.php }} (${{ matrix.deps }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.2', '8.3', '8.4']
+        deps: ['highest']
+        include:
+          # The floor of every declared constraint, which is what someone on an
+          # older project actually resolves to.
+          - php: '8.2'
+            deps: 'lowest'
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: json, mbstring, intl
+          coverage: none
+
+      - uses: ramsey/composer-install@v4
+        with:
+          dependency-versions: ${{ matrix.deps }}
+
+      # Never the integration suite: it needs a real MYBOX account and burns quota.
+      - run: composer test
+
+  static-analysis:
+    name: Static analysis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: json, mbstring, intl
+          coverage: none
+      - uses: ramsey/composer-install@v4
+      - run: composer analyse
+
+  coding-standards:
+    name: Coding standards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: shivammathur/setup-php@v2
+        with:
+          # Match the package floor: PHP-CS-Fixer warns when run on a newer
+          # runtime than the project supports.
+          php-version: '8.2'
+          coverage: none
+      - uses: ramsey/composer-install@v4
+      - run: composer cs
+
+  composer-health:
+    name: Composer manifest and advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          coverage: none
+      - run: composer validate --strict
+      - uses: ramsey/composer-install@v4
+      - run: composer audit
